@@ -52,6 +52,11 @@
 #include "ixgbe_dcb_82599.h"
 #include "ixgbe_sriov.h"
 
+/* For time measurement */
+struct timespec ts_old,ts_new,test_of_time;
+static int max_pkts = 1000;
+static int count_pkts = 0;
+
 char ixgbe_driver_name[] = "ixgbe";
 static const char ixgbe_driver_string[] =
 			      "Intel(R) 10 Gigabit PCI Express Network Driver";
@@ -1025,6 +1030,16 @@ static void ixgbe_receive_skb(struct ixgbe_q_vector *q_vector,
 			      struct ixgbe_ring *ring,
 			      union ixgbe_adv_rx_desc *rx_desc)
 {
+    getnstimeofday(&ts_new);
+    count_pkts++;
+    test_of_time = timespec_sub(ts_new,ts_old);
+    if(count_pkts <= max_pkts){
+        printk(" **** packet %d - iat: %lu seconds and %lu nanoseconds ***\n",count_pkts, test_of_time.tv_sec,test_of_time.tv_nsec);
+    }
+
+    ts_old.tv_sec = ts_new.tv_sec;
+    ts_old.tv_nsec = ts_new.tv_nsec;
+
 	struct ixgbe_adapter *adapter = q_vector->adapter;
 	struct napi_struct *napi = &q_vector->napi;
 	bool is_vlan = (status & IXGBE_RXD_STAT_VP);
@@ -1244,6 +1259,7 @@ static bool ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 			       struct ixgbe_ring *rx_ring,
 			       int budget)
 {
+    
 	struct ixgbe_adapter *adapter = q_vector->adapter;
 	union ixgbe_adv_rx_desc *rx_desc, *next_rxd;
 	struct ixgbe_rx_buffer *rx_buffer_info, *next_buffer;
