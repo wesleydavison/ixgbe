@@ -61,7 +61,7 @@
 /* For time measurement */
 struct timespec ts_old,ts_new,process_time;
 struct timespec poll_time_old, poll_time_new,poll_time_diff;
-static int max_pkts = 5000;
+static int max_pkts = 1000;
 static int count_pkts = 0;
 static int count_batches = 0;
 static int batch_pkts = 0;
@@ -2364,16 +2364,6 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
     getnstimeofday(&ts_new);
     process_time = timespec_sub(ts_new,ts_old);
     //printk(" **** batch:%d - packets:%d - process_time:%ld  ***\n",count_batches, batch_pkts, process_time.tv_nsec);
-    if(count_pkts < max_pkts){
-        total_time += process_time.tv_nsec;
-    }
-    else{
-        total_time += process_time.tv_nsec;
-        //printk(" **** packets:%d - total_time:%lld  ***\n",count_pkts, total_time);
-        count_pkts = 0;
-        total_time = 0;
-    }
-
 
     return total_rx_packets;
 }
@@ -3142,7 +3132,16 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 
     getnstimeofday(&poll_time_new);
     poll_time_diff = timespec_sub(poll_time_new,poll_time_old);
-    printk(" #### poll time:%ld - packets:%d - budget:%d\n###", poll_time_diff.tv_nsec, batch_pkts, budget);
+    if(count_pkts < max_pkts){
+        total_time += poll_time_diff.tv_nsec;
+    }
+    else{
+        total_time += poll_time_diff.tv_nsec;
+        printk(" **** packets:%d - total_time:%lld  ***\n",count_pkts, total_time);
+        count_pkts = 0;
+        total_time = 0;
+    }
+    //printk(" #### poll time:%ld - packets:%d - budget:%d\n###", poll_time_diff.tv_nsec, batch_pkts, budget);
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	ixgbe_qv_unlock_napi(q_vector);
