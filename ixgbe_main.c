@@ -59,10 +59,15 @@
 #include "ixgbe_sriov.h"
 
 /* For time measurement */
-struct timespec ts_old,ts_new,test_of_time;
-static int max_pkts = 1000;
+struct timespec ts_old,ts_new,process_time;
+struct timespec poll_time_old, poll_time_new,poll_time_diff;
+static int max_pkts = 5000;
 static int count_pkts = 0;
 static int count_batches = 0;
+static int batch_pkts = 0;
+static int batch_bytes = 0;
+static int total_pkts = 0;
+static long long total_time = 0;
 
 char ixgbe_driver_name[] = "ixgbe";
 static const char ixgbe_driver_string[] =
@@ -2238,16 +2243,19 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 			       struct ixgbe_ring *rx_ring,
 			       int budget)
 {
+    getnstimeofday(&ts_old);
+    count_batches++;
+
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
 #ifdef IXGBE_FCOE
 	int ddp_bytes = 0;
 #endif /* IXGBE_FCOE */
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
     
-    count_batches++;
-    int batch_pkts = 0;
-    int batch_bytes = 0;
+
 	do {
+        count_pkts++;
+
 		union ixgbe_adv_rx_desc *rx_desc;
 		struct sk_buff *skb;
 
@@ -2269,15 +2277,6 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		 */
 		rmb();
 
-        getnstimeofday(&ts_new);
-        count_pkts++;
-        test_of_time = timespec_sub(ts_new,ts_old);
-        if(count_pkts <= max_pkts){
-            printk(" **** packet %d - iat: %lu seconds and %lu nanoseconds ***\n",count_pkts, test_of_time.tv_sec,test_of_time.tv_nsec);
-        }
-
-        ts_old.tv_sec = ts_new.tv_sec;
-        ts_old.tv_nsec = ts_new.tv_nsec;
 		
         /* retrieve a buffer from the ring */
 		skb = ixgbe_fetch_rx_buffer(rx_ring, rx_desc);
@@ -2326,6 +2325,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		total_rx_packets++;
 	} while (likely(total_rx_packets < budget));
     
+    
 #ifdef IXGBE_FCOE
 	/* include DDPed FCoE data */
 	if (ddp_bytes > 0) {
@@ -2360,7 +2360,22 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	ixgbe_lro_flush_all(q_vector);
 
 #endif /* IXGBE_NO_LRO */
-	return total_rx_packets;
+
+    getnstimeofday(&ts_new);
+    process_time = timespec_sub(ts_new,ts_old);
+    //printk(" **** batch:%d - packets:%d - process_time:%ld  ***\n",count_batches, batch_pkts, process_time.tv_nsec);
+    if(count_pkts < max_pkts){
+        total_time += process_time.tv_nsec;
+    }
+    else{
+        total_time += process_time.tv_nsec;
+        //printk(" **** packets:%d - total_time:%lld  ***\n",count_pkts, total_time);
+        count_pkts = 0;
+        total_time = 0;
+    }
+
+
+    return total_rx_packets;
 }
 
 #else /* CONFIG_IXGBE_DISABLE_PACKET_SPLIT */
@@ -3089,6 +3104,7 @@ static irqreturn_t ixgbe_msix_clean_rings(int irq, void *data)
  **/
 int ixgbe_poll(struct napi_struct *napi, int budget)
 {
+
 	struct ixgbe_q_vector *q_vector =
 			       container_of(napi, struct ixgbe_q_vector, napi);
 	struct ixgbe_adapter *adapter = q_vector->adapter;
@@ -3117,10 +3133,16 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 	else
 		per_ring_budget = budget;
 
+    getnstimeofday(&poll_time_old);
+    
 	ixgbe_for_each_ring(ring, q_vector->rx)
 	clean_complete &= (ixgbe_clean_rx_irq(q_vector, ring,
 					      per_ring_budget)
 			   < per_ring_budget);
+
+    getnstimeofday(&poll_time_new);
+    poll_time_diff = timespec_sub(poll_time_new,poll_time_old);
+    printk(" #### poll time:%ld - packets:%d - budget:%d\n###", poll_time_diff.tv_nsec, batch_pkts, budget);
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	ixgbe_qv_unlock_napi(q_vector);
@@ -3131,16 +3153,18 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 		clean_complete = true;
 
 #endif
+
 	/* If all work not completed, return budget and keep polling */
 	if (!clean_complete)
 		return budget;
-
+ 
 	/* all work done, exit the polling mode */
 	napi_complete(napi);
 	if (adapter->rx_itr_setting == 1)
 		ixgbe_set_itr(q_vector);
 	if (!test_bit(__IXGBE_DOWN, &adapter->state))
 		ixgbe_irq_enable_queues(adapter, ((u64)1 << q_vector->v_idx));
+
 
 	return 0;
 }
