@@ -3095,6 +3095,22 @@ static irqreturn_t ixgbe_msix_clean_rings(int irq, void *data)
 int ixgbe_poll(struct napi_struct *napi, int budget)
 {
 
+    poll_time_old.tv_sec = poll_time_new.tv_sec;
+    poll_time_old.tv_nsec = poll_time_new.tv_nsec;
+    
+    getnstimeofday(&poll_time_new);
+
+    poll_time_diff = timespec_sub(poll_time_new,poll_time_old);
+    if(count_pkts < max_pkts){
+        total_time += poll_time_diff.tv_nsec;
+    }
+    else{
+        total_time += poll_time_diff.tv_nsec;
+        printk(" **** packets:%d - total_time:%lld  ***\n",count_pkts, total_time);
+        count_pkts = 0;
+        total_time = 0;
+    }
+
 	struct ixgbe_q_vector *q_vector =
 			       container_of(napi, struct ixgbe_q_vector, napi);
 	struct ixgbe_adapter *adapter = q_vector->adapter;
@@ -3109,8 +3125,7 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 #endif
 	ixgbe_for_each_ring(ring, q_vector->tx)
 		clean_complete &= ixgbe_clean_tx_irq(q_vector, ring);
-
-
+    
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	if (!ixgbe_qv_lock_napi(q_vector))
 		return budget;
@@ -3123,24 +3138,12 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 	else
 		per_ring_budget = budget;
 
-    getnstimeofday(&poll_time_old);
     
 	ixgbe_for_each_ring(ring, q_vector->rx)
 	clean_complete &= (ixgbe_clean_rx_irq(q_vector, ring,
 					      per_ring_budget)
 			   < per_ring_budget);
 
-    getnstimeofday(&poll_time_new);
-    poll_time_diff = timespec_sub(poll_time_new,poll_time_old);
-    if(count_pkts < max_pkts){
-        total_time += poll_time_diff.tv_nsec;
-    }
-    else{
-        total_time += poll_time_diff.tv_nsec;
-        printk(" **** packets:%d - total_time:%lld  ***\n",count_pkts, total_time);
-        count_pkts = 0;
-        total_time = 0;
-    }
     //printk(" #### poll time:%ld - packets:%d - budget:%d\n###", poll_time_diff.tv_nsec, batch_pkts, budget);
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
@@ -3155,15 +3158,13 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 
 	/* If all work not completed, return budget and keep polling */
 	if (!clean_complete)
-		return budget;
- 
+        return budget;
 	/* all work done, exit the polling mode */
 	napi_complete(napi);
 	if (adapter->rx_itr_setting == 1)
 		ixgbe_set_itr(q_vector);
 	if (!test_bit(__IXGBE_DOWN, &adapter->state))
 		ixgbe_irq_enable_queues(adapter, ((u64)1 << q_vector->v_idx));
-
 
 	return 0;
 }
@@ -5661,6 +5662,7 @@ void ixgbe_reset(struct ixgbe_adapter *adapter)
  * ixgbe_clean_rx_ring - Free Rx Buffers per Queue
  * @rx_ring: ring to free buffers from
  **/
+ /* Called only when removing module */
 void ixgbe_clean_rx_ring(struct ixgbe_ring *rx_ring)
 {
 	struct device *dev = rx_ring->dev;
